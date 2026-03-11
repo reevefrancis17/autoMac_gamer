@@ -1,0 +1,43 @@
+[env]
+rom_path = ""
+action_repeat = 4
+frame_skip = 1
+max_episode_steps = 3000
+headless_speed = 0
+watch_speed = 1
+reset_seed_modulo = 256
+
+[reward]
+survival_reward = 0.01
+line_clear_reward = 1.0
+score_delta_scale = 0.01
+game_over_penalty = -5.0
+
+[model]
+hidden_dim = 256
+learning_rate = 0.001
+gamma = 0.99
+batch_size = 128
+replay_capacity = 100000
+learning_starts = 2000
+train_frequency = 4
+target_update_interval = 2000
+epsilon_start = 1.0
+epsilon_end = 0.05
+epsilon_decay_steps = 100000
+
+[device]
+preference = "mps"
+
+[run]
+seed = 7
+total_steps = 250000
+log_interval = 500
+checkpoint_interval = 5000
+run_dir = "runs/tetris_baseline"
+resume_from = ""
+
+[watch]
+checkpoint_poll_seconds = 5.0
+refresh_between_episodes = true
+watch_episodes = 0
