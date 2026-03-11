@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import io
 
 import numpy as np
 
@@ -29,6 +30,12 @@ class PyBoySession:
         )
         self.pyboy.set_emulation_speed(self.speed)
         self.game_wrapper = self.pyboy.game_wrapper
+
+    @property
+    def cartridge_title(self) -> str:
+        if self.pyboy is None:
+            return ""
+        return str(self.pyboy.cartridge_title)
 
     def start_game(self, timer_div: int | None) -> None:
         if self.pyboy is None:
@@ -64,6 +71,26 @@ class PyBoySession:
 
     def game_over(self) -> bool:
         return bool(self.game_wrapper.game_over())
+
+    def read_mem(self, addr: int) -> int:
+        return int(self.pyboy.memory[addr])
+
+    def read_mem_slice(self, start: int, length: int) -> np.ndarray:
+        data = [int(self.pyboy.memory[start + i]) for i in range(length)]
+        return np.asarray(data, dtype=np.int16)
+
+    def write_mem(self, addr: int, value: int) -> None:
+        self.pyboy.memory[addr] = int(value) & 0xFF
+
+    def save_state_bytes(self) -> bytes:
+        handle = io.BytesIO()
+        self.pyboy.save_state(handle)
+        return handle.getvalue()
+
+    def load_state_bytes(self, payload: bytes) -> None:
+        handle = io.BytesIO(payload)
+        handle.seek(0)
+        self.pyboy.load_state(handle)
 
     def close(self) -> None:
         if self.pyboy is not None:

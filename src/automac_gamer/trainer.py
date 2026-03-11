@@ -4,9 +4,11 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 import json
+import random
 import shutil
 
 import torch
+from torch import nn
 
 from automac_gamer.config import ExperimentConfig
 from automac_gamer.core.interfaces import Trainer
@@ -108,6 +110,66 @@ class TetrisDQNTrainer(Trainer):
         shutil.copy2(checkpoint_path, latest_path)
         return checkpoint_path
 
+    def _imitation_warmup(self, steps: int = 6000, epochs: int = 3) -> None:
+        observations: list[torch.Tensor] = []
+        actions: list[int] = []
+
+        obs = self._train_env.reset(seed=self.config.run.seed)
+        obs_vec = flatten_observation(obs)
+
+        for step in range(steps):
+            guided = self._train_env.guided_action(step)
+            if guided is None:
+                guided = random.randrange(self._train_env.action_space_n)
+
+            result = self._train_env.step(guided)
+            next_obs_vec = flatten_observation(result.observation)
+
+            self.agent.buffer.add(
+                obs=obs_vec,
+                action=guided,
+                reward=result.reward,
+                next_obs=next_obs_vec,
+                done=result.done,
+            )
+            observations.append(torch.tensor(obs_vec, dtype=torch.float32))
+            actions.append(int(guided))
+            obs_vec = next_obs_vec
+
+            if result.done:
+                obs = self._train_env.reset(seed=self.config.run.seed + step + 1)
+                obs_vec = flatten_observation(obs)
+
+        if not observations:
+            return
+
+        x = torch.stack(observations).to(self.device)
+        y = torch.tensor(actions, dtype=torch.long, device=self.device)
+
+        batch_size = 256
+        self.agent.q_net.train()
+        for _ in range(epochs):
+            perm = torch.randperm(x.size(0), device=self.device)
+            for start in range(0, x.size(0), batch_size):
+                idx = perm[start : start + batch_size]
+                logits = self.agent.q_net(x[idx])
+                loss = nn.functional.cross_entropy(logits, y[idx])
+                self.agent.optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.agent.q_net.parameters(), max_norm=10.0)
+                self.agent.optimizer.step()
+        self.agent.target_net.load_state_dict(self.agent.q_net.state_dict())
+        self.agent.state.global_step = max(self.agent.state.global_step, steps)
+        append_metrics(
+            self.metrics_path,
+            {
+                "kind": "imitation_warmup",
+                "global_step": self.agent.state.global_step,
+                "samples": int(x.size(0)),
+                "epochs": epochs,
+            },
+        )
+
     def train(self) -> Path:
         cfg = self.config
         obs = self._train_env.reset(seed=cfg.run.seed)
@@ -118,8 +180,16 @@ class TetrisDQNTrainer(Trainer):
 
         last_loss = None
         try:
+            self._imitation_warmup()
+            obs = self._train_env.reset(seed=cfg.run.seed + 100_000)
+            obs_vec = flatten_observation(obs)
             for _ in range(cfg.run.total_steps):
-                action = self.agent.act(obs_vec, eval_mode=False)
+                guided_action = self._train_env.guided_action(self.agent.state.global_step)
+                guidance_prob = max(0.15, 0.8 - (self.agent.state.global_step / 80_000.0))
+                if guided_action is not None and random.random() < guidance_prob:
+                    action = guided_action
+                else:
+                    action = self.agent.act(obs_vec, eval_mode=False)
                 result = self._train_env.step(action)
                 next_obs_vec = flatten_observation(result.observation)
 
